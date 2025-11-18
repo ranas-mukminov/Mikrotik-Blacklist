@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to this project! This fork aims to provide an actively maintained, high-quality MikroTik blocklist.
 
+> **Note for AI Contributors**: If you are an AI agent (like GitHub Copilot), please refer to [`.github/copilot-instructions.md`](.github/copilot-instructions.md) for specific workflow rules including branch naming conventions (`copilot/` prefix) and PR requirements.
+
 ## Ways to Contribute
 
 - 🐛 Report bugs and issues

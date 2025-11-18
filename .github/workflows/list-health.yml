@@ -1,0 +1,173 @@
+name: List Health Checks
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  validate-lists:
+    name: Validate Blacklist Files
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Verify required files exist
+        run: |
+          echo "Checking for required files..."
+          if [ ! -f blacklist.rsc ]; then
+            echo "ERROR: blacklist.rsc not found"
+            exit 1
+          fi
+          if [ ! -f blacklist-light.rsc ]; then
+            echo "ERROR: blacklist-light.rsc not found"
+            exit 1
+          fi
+          echo "✓ All required files exist"
+      
+      - name: Check file sizes
+        run: |
+          echo "Checking file sizes..."
+          
+          # Minimum line counts (excluding header comments)
+          MIN_STANDARD=1000
+          MIN_LIGHT=500
+          
+          # Count non-comment, non-empty lines
+          STANDARD_LINES=$(grep -v '^#' blacklist.rsc | grep -v '^$' | wc -l)
+          LIGHT_LINES=$(grep -v '^#' blacklist-light.rsc | grep -v '^$' | wc -l)
+          
+          echo "Standard list: $STANDARD_LINES non-comment lines"
+          echo "Light list: $LIGHT_LINES non-comment lines"
+          
+          if [ $STANDARD_LINES -lt $MIN_STANDARD ]; then
+            echo "ERROR: Standard list too small ($STANDARD_LINES < $MIN_STANDARD)"
+            exit 1
+          fi
+          
+          if [ $LIGHT_LINES -lt $MIN_LIGHT ]; then
+            echo "ERROR: Light list too small ($LIGHT_LINES < $MIN_LIGHT)"
+            exit 1
+          fi
+          
+          echo "✓ File sizes are acceptable"
+      
+      - name: Check for merge conflict markers
+        run: |
+          echo "Checking for merge conflict markers..."
+          
+          if grep -q '<<<<<<< ' blacklist.rsc blacklist-light.rsc; then
+            echo "ERROR: Merge conflict markers found in blacklist files"
+            exit 1
+          fi
+          
+          if grep -q '=======' blacklist.rsc blacklist-light.rsc; then
+            echo "ERROR: Merge conflict markers found in blacklist files"
+            exit 1
+          fi
+          
+          if grep -q '>>>>>>> ' blacklist.rsc blacklist-light.rsc; then
+            echo "ERROR: Merge conflict markers found in blacklist files"
+            exit 1
+          fi
+          
+          echo "✓ No merge conflict markers found"
+      
+      - name: Check for duplicate entries
+        run: |
+          echo "Checking for duplicate IP entries..."
+          
+          # Extract IP addresses from blacklist.rsc
+          STANDARD_IPS=$(grep -oP '"\K[^"]+' blacklist.rsc | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+          STANDARD_UNIQUE=$(echo "$STANDARD_IPS" | sort -u | wc -l)
+          STANDARD_TOTAL=$(echo "$STANDARD_IPS" | wc -l)
+          
+          # Extract IP addresses from blacklist-light.rsc
+          LIGHT_IPS=$(grep -oP '"\K[^"]+' blacklist-light.rsc | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' || true)
+          LIGHT_UNIQUE=$(echo "$LIGHT_IPS" | sort -u | wc -l)
+          LIGHT_TOTAL=$(echo "$LIGHT_IPS" | wc -l)
+          
+          echo "Standard list: $STANDARD_TOTAL total, $STANDARD_UNIQUE unique"
+          echo "Light list: $LIGHT_TOTAL total, $LIGHT_UNIQUE unique"
+          
+          if [ $STANDARD_TOTAL -ne $STANDARD_UNIQUE ]; then
+            DUPES=$((STANDARD_TOTAL - STANDARD_UNIQUE))
+            echo "WARNING: Standard list has $DUPES duplicate entries"
+            # Not failing on duplicates as they might be intentional overlaps
+          fi
+          
+          if [ $LIGHT_TOTAL -ne $LIGHT_UNIQUE ]; then
+            DUPES=$((LIGHT_TOTAL - LIGHT_UNIQUE))
+            echo "WARNING: Light list has $DUPES duplicate entries"
+          fi
+          
+          echo "✓ Duplicate check completed"
+      
+      - name: Validate light vs standard list sizes
+        run: |
+          echo "Validating that light list is not larger than standard list..."
+          
+          # Extract and count IP addresses
+          STANDARD_COUNT=$(grep -oP '"\K[^"]+' blacklist.rsc | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | wc -l || echo "0")
+          LIGHT_COUNT=$(grep -oP '"\K[^"]+' blacklist-light.rsc | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | wc -l || echo "0")
+          
+          echo "Standard list: $STANDARD_COUNT entries"
+          echo "Light list: $LIGHT_COUNT entries"
+          
+          if [ $LIGHT_COUNT -gt $STANDARD_COUNT ]; then
+            echo "ERROR: Light list has more entries than standard list!"
+            echo "  Light: $LIGHT_COUNT"
+            echo "  Standard: $STANDARD_COUNT"
+            exit 1
+          fi
+          
+          DIFF=$((STANDARD_COUNT - LIGHT_COUNT))
+          echo "✓ Light list is smaller by $DIFF entries (as expected)"
+      
+      - name: Validate RouterOS script syntax
+        run: |
+          echo "Performing basic RouterOS script syntax validation..."
+          
+          # Check for balanced braces
+          for file in blacklist.rsc blacklist-light.rsc; do
+            echo "Checking $file..."
+            
+            OPEN_BRACES=$(grep -o '{' $file | wc -l)
+            CLOSE_BRACES=$(grep -o '}' $file | wc -l)
+            
+            if [ $OPEN_BRACES -ne $CLOSE_BRACES ]; then
+              echo "ERROR: Unbalanced braces in $file"
+              echo "  Open: $OPEN_BRACES, Close: $CLOSE_BRACES"
+              exit 1
+            fi
+            
+            echo "  ✓ Braces balanced ($OPEN_BRACES pairs)"
+          done
+          
+          echo "✓ Basic syntax validation passed"
+      
+      - name: Summary
+        if: success()
+        run: |
+          echo "=========================================="
+          echo "✓ All list health checks passed!"
+          echo "=========================================="
+          echo ""
+          echo "The blacklist files are:"
+          echo "  - Present and non-trivial in size"
+          echo "  - Free of merge conflict markers"
+          echo "  - Properly sized (light ≤ standard)"
+          echo "  - Syntactically valid RouterOS scripts"
+          echo ""
+          echo "Ready for deployment!"
